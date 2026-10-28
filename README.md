@@ -257,3 +257,7 @@ printf '%b' '\033[B\033[B\r' | timeout 6 script -qec 'COLUMNS=90 /tmp/ait' /dev/
 - shell completion for `ai <TAB>` from the existing `ai -l` output
 - `ai -u`: check each tool for updates instead of launching it
 - keep the registry in a data file so new tools need no code change
+
+## License
+
+MIT — see [LICENSE](LICENSE).
