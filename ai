@@ -1,41 +1,196 @@
 #!/usr/bin/env bash
-# ai - pick and launch an installed local AI coding CLI.
+# ai - launcher for locally installed AI coding CLIs.
 
 set -u
 
+VERSION="0.3"
 NONINTERACTIVE=0
 SAVED_TTY=""
+CONFIG="${AI_CONFIG:-$HOME/.config/ai/tools.conf}"
+BIN_DIR="${AI_BIN_DIR:-$HOME/.local/bin}"
 
-# Candidates: display name | command | optional launch args (space separated)
+# Curated registry: Label|command|launch args|install hint.
+# npm package names were verified against the npm registry on 2026-10-28;
+# the rest come from each vendor's own install docs. This list only supplies
+# friendly labels and hints - discovery below finds tools that are not listed.
 CANDIDATES=(
-  "Qoder|qoder|"
-  "OpenCode|opencode|"
-  "Claude Code|claude|"
-  "Codex|codex|"
-  "Gemini CLI|gemini|"
-  "Aider|aider|"
-  "Cursor Agent|cursor-agent|"
-  "Crush|crush|"
-  "Goose|goose|"
-  "Amp|amp|"
-  "Droid|droid|"
+  "Qoder|qoder||"
+  "OpenCode|opencode||npm:opencode-ai"
+  "Claude Code|claude||npm:@anthropic-ai/claude-code"
+  "Codex|codex||npm:@openai/codex"
+  "Gemini CLI|gemini||npm:@google/gemini-cli"
+  "Copilot CLI|copilot||npm:@github/copilot"
+  "Cursor Agent|cursor-agent||"
+  "Amp|amp||npm:@sourcegraph/amp"
+  "Droid|droid||npm:@factory/cli"
+  "Kiro|kiro-cli||"
+  "Augment|augment||"
+  "Goose|goose||"
+  "Crush|crush||"
+  "Aider|aider||pipx:aider-chat"
+  "Kilo|kilo||npm:@kilocode/cli"
+  "Cline|clite||npm:@cline/cli"
+  "OpenHands|openhands||"
+  "Continue|cn||npm:@continuedev/cli"
+  "Qwen Code|qwen||npm:@qwen-code/qwen-code"
+  "Kimi Code|kimi||npm:@moonshot-ai/kimi-code"
+  "iFlow|iflow||npm:@iflow-ai/iflow-cli"
+  "Codebuff|codebuff||npm:codebuff"
 )
 
-tools=()
-names=()
-for entry in "${CANDIDATES[@]}"; do
-  IFS='|' read -r label cmd args <<< "$entry"
-  names+=("$cmd")
-  if path=$(command -v "$cmd" 2>/dev/null); then
-    tools+=("$label|$cmd|$args|$path")
-  fi
-done
+# Name fragments that mark a binary as an AI coding agent during discovery.
+# Extend without editing the script: AI_AGENT_TOKENS='claude|mytool'
+AGENT_TOKENS="${AI_AGENT_TOKENS:-claude|codex|gemini|opencode|crush|goose|aider|droid|copilot|kilocode|kilo|clite|qwen|kimi|iflow|codebuff|openhands|kiro|augment|qoder|aichat|chatblade|mipilot|chacha|grok|mycoder|llm|sgpt|tgpt|amp}"
+# Bare "<name>-agent" is only accepted with an AI-ish root, otherwise ssh-agent
+# and friends show up as coding tools.
+AGENT_ROOT='ai|cli|open|super|my|dev|code|cod|llm|gpt|copilot|agent'
+AGENT_RE="(^(cli-|ai-)?(${AGENT_TOKENS})([-_].*)?$)|^(${AGENT_ROOT})([-_].*)?[-_]agent$"
+# Discovery matches these but they are editors, wrappers or unrelated tools.
+DENY_RE='^(ai|code|codium|cursor)$|\.(exe|bak|old|orig|py[co]|zip|zst|appimage)$|[-_](setup|install|templates|proxy|router|bridge|server|daemon|doctor|login|auth|token|key|completion|helper|shim|wrapper|test)$'
+# System daemons that end in "-agent" and are not AI tools.
+SYSTEM_AGENT_RE='(^|[-_])(ssh|gpg|pgp|pinentry|pam|polkit|systemd|tty|dbus|udev|udisks|upower|network|consolekit|keyring|secret|secrets|avahi|bluetooth|cups|mail|clamav|antivirus|fail2ban|password|user|session|log|logging|metric|metrics|stats|watchdog|update|packagekit|apparmor|audit|git|svn|docker|containerd|kube|bus|socket|net|fs|gc|cc|term|x11|wayland)-agent$'
 
-if [ ${#tools[@]} -eq 0 ]; then
-  echo "ai: no supported AI CLI found on PATH." >&2
-  echo "looked for: $(printf '%s, ' "${names[@]}" | sed 's/, $//')" >&2
-  exit 1
-fi
+# Vendor install dirs searched even when missing from PATH.
+EXTRA_DIRS=(
+  "$HOME/.local/bin"
+  "$HOME/.bun/bin"
+  "$HOME/.cargo/bin"
+  "$HOME/go/bin"
+  "$HOME/.npm-global/bin"
+  "$HOME/.deno/bin"
+  "$HOME/.opencode/bin"
+  "$HOME/.qoder/entry"
+  "/usr/local/bin"
+  "/opt/homebrew/bin"
+  "$HOME/.linuxbrew/bin"
+)
+
+usage() {
+  cat <<USAGE
+ai $VERSION - launcher for local AI coding CLIs
+
+  ai                      pick a tool with the arrow keys, enter to launch
+  ai <tool> [args...]     launch by command or label name, args pass through
+  ai -l                   list detected tools (tab separated: command, label)
+  ai -a | --all           registry + discovered tools, found and missing
+  ai --missing            registry entries not installed yet
+  install [--copy]        link this script into $BIN_DIR (override: AI_BIN_DIR)
+  uninstall               remove that link, only if it points back here
+  doctor                  dependency, discovery and registry check
+  help                    this message
+
+Detection:
+  Scans every PATH entry plus a few vendor install dirs and matches agent-name
+  patterns, so locally installed tools are found without registering them.
+  PATH dirs under /mnt are skipped so Windows shares do not slow the scan.
+  AI_DISCOVER=0        skip discovery, use the registry only
+  AI_EXTRA_DIRS="a:b"  more dirs to scan
+  AI_AGENT_TOKENS      extend the name patterns that count as an agent
+
+Environment:
+  AI_CONFIG, AI_BIN_DIR override the config file and the install target.
+
+Config ($CONFIG, one entry per line):
+  Label|command|args      add your own agent
+  !command                hide a tool discovery keeps finding
+  # starts a comment
+
+Keys: up/down or j/k move, 1-9 jumps, g/G first/last, home/end, enter launches, q quits.
+
+Quick start:
+  chmod +x ai
+  ./ai install          # then run "ai" anywhere
+USAGE
+}
+
+check_deps() {
+  local rc=0 soft=()
+  if ! command -v stty >/dev/null 2>&1; then
+    printf 'ai: "stty" is required for arrow-key navigation and was not found.\n' >&2
+    rc=1
+  fi
+  [ "$rc" = 0 ] || exit 1
+  command -v tput >/dev/null 2>&1 || soft+=("tput missing: terminal size falls back to 80x24")
+  if [ "${1:-}" = verbose ]; then
+    printf 'bash     %s\n' "$BASH_VERSION"
+    printf 'stty     %s\n' "$(command -v stty)"
+    printf 'tput     %s\n' "$(command -v tput 2>/dev/null || echo missing)"
+    printf 'config   %s\n' "$CONFIG"
+    printf 'bin dir  %s\n' "$BIN_DIR"
+    printf 'discover %s\n' "${AI_DISCOVER:-1}"
+    for s in "${soft[@]}"; do printf 'note     %s\n' "$s"; done
+  fi
+}
+
+# Sets FOUND_PATH. Scans DIRS directly instead of `command -v`, because command
+# substitution forks a process per lookup and that dominated startup on WSL.
+find_cmd() {
+  local d
+  FOUND_PATH=""
+  case $1 in
+    */*)
+      # config entries may name a full path
+      if [ -f "$1" ] && [ -x "$1" ]; then FOUND_PATH=$1; return 0; fi
+      return 1
+      ;;
+  esac
+  for d in "${DIRS[@]}"; do
+    if [ -f "$d/$1" ] && [ -x "$d/$1" ]; then
+      FOUND_PATH="$d/$1"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Every directory we look in: PATH, EXTRA_DIRS, then AI_EXTRA_DIRS.
+# Paths are deduped with stat (-ef) so /bin and /usr/bin are only scanned once.
+build_dirs() {
+  local raw e dup
+  local -a parts=() more=()
+  IFS=':' read -ra parts <<< "$PATH"
+  IFS=':' read -ra more <<< "${AI_EXTRA_DIRS:-}"
+  for raw in "${parts[@]}" "${EXTRA_DIRS[@]}" "${more[@]}"; do
+    [ -n "$raw" ] || continue
+    case "$raw" in
+      /*) ;;
+      *) continue ;;
+    esac
+    case "$raw" in /mnt/*) continue ;; esac
+    [ -d "$raw" ] || continue
+    dup=0
+    for e in "${DIRS[@]}"; do
+      if [ "$e" -ef "$raw" ]; then dup=1; break; fi
+    done
+    [ "$dup" = 1 ] || DIRS+=("$raw")
+  done
+}
+
+tools=()
+all=()
+DIRS=()
+declare -A have_cmd=() seen_cmd=() hidden_cmd=()
+
+add_entry() {
+  local label=$1 cmd=$2 args=${3:-} hint=${4:-} path
+  [ -n "$cmd" ] || return 0
+  [ -z "${hidden_cmd[$cmd]:-}" ] || return 0
+  [ -z "${seen_cmd[$cmd]:-}" ] || return 0
+  seen_cmd[$cmd]=1
+  if find_cmd "$cmd"; then
+    path=$FOUND_PATH
+    have_cmd[$cmd]=1
+    tools+=("$label|$cmd|$args|$hint|$path")
+  else
+    path=""
+  fi
+  all+=("$label|$cmd|$args|$hint|$path")
+}
+
+title_label() {
+  local s=${1//[-_]/ }
+  printf '%s' "${s^}"
+}
 
 restore_tty() {
   [ -n "$SAVED_TTY" ] && stty "$SAVED_TTY" 2>/dev/null
@@ -44,12 +199,14 @@ restore_tty() {
 
 launch() {
   local line="$1"; shift
-  IFS='|' read -r label cmd args path <<< "$line"
+  IFS='|' read -r label cmd args hint path <<< "$line"
   [ -n "$args" ] && set -- $args "$@"
   restore_tty
   printf '\033[0m'
   printf 'launching %s (%s)\n' "$label" "$cmd" >&2
-  exec "$cmd" "$@"
+  # path can come from a non-PATH dir, so exec the resolved binary rather than
+  # relying on PATH lookup.
+  exec "${path:-$cmd}" "$@"
 }
 
 cleanup() {
@@ -60,41 +217,180 @@ cleanup() {
   exit "$rc"
 }
 
+show_all() {
+  local only_missing=$1 line n_found=0
+  printf '%-20s %-14s %-8s %s\n' "LABEL" "COMMAND" "STATUS" "PATH / INSTALL"
+  for line in "${tools[@]}"; do
+    IFS='|' read -r label cmd args hint path <<< "$line"
+    printf '%-20s %-14s %-8s %s\n' "$label" "${cmd##*/}" "found" "${path/#$HOME/\~}"
+    n_found=$((n_found + 1))
+  done
+  for line in "${all[@]}"; do
+    IFS='|' read -r label cmd args hint path <<< "$line"
+    [ -z "$path" ] || continue
+    [ "$only_missing" = 1 ] || printf '%-20s %-14s %-8s %s\n' "$label" "${cmd##*/}" "missing" "${hint:-see vendor docs}"
+  done
+  printf '\n%s found, %s registry entries missing.\n' "$n_found" "$((${#all[@]} - n_found))"
+}
+
+self_path() { readlink -f "${BASH_SOURCE[0]}"; }
+
+path_has() {
+  local p=${1%/}
+  case ":$PATH:" in *":$p:"*) return 0 ;; esac
+  return 1
+}
+
+do_install() {
+  local mode=symlink src target
+  [ "${1:-}" = --copy ] && mode=copy
+  src=$(self_path)
+  check_deps
+  mkdir -p "$BIN_DIR" || { printf 'ai: cannot create %s\n' "$BIN_DIR" >&2; exit 1; }
+  target="$BIN_DIR/ai"
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    if [ "$(readlink -f "$target")" = "$src" ]; then
+      printf 'already installed: %s -> %s\n' "$target" "$src"
+      return 0
+    fi
+    printf 'ai: %s already exists and is not this script. Not overwriting.\n' "$target" >&2
+    printf '   remove it yourself, or install elsewhere: AI_BIN_DIR=/other/dir ai install\n' >&2
+    return 1
+  fi
+  if [ "$mode" = copy ]; then
+    cp "$src" "$target" && chmod +x "$target"
+    printf 'installed (copy):    %s\n' "$target"
+  else
+    ln -s "$src" "$target"
+    printf 'installed (symlink): %s -> %s\n' "$target" "$src"
+  fi
+  if path_has "$BIN_DIR"; then
+    printf 'ready: run "ai" from any shell.\n'
+  else
+    printf '\nwarning: %s is not on PATH. Add to your shell rc:\n' "$BIN_DIR" >&2
+    printf '  export PATH="%s:$PATH"\n' "$BIN_DIR" >&2
+  fi
+}
+
+do_uninstall() {
+  local src target real
+  src=$(self_path)
+  target="$BIN_DIR/ai"
+  if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+    printf 'nothing to remove at %s\n' "$target"
+    return 0
+  fi
+  real=$(readlink -f "$target")
+  if [ "$real" != "$src" ] && ! cmp -s "$target" "$src"; then
+    printf 'ai: %s does not point at this script (%s).\n' "$target" "$src" >&2
+    printf '   refusing to delete it; remove it manually if it is yours.\n' >&2
+    return 1
+  fi
+  rm -f "$target" && printf 'removed %s\n' "$target"
+}
+
+# Subcommands that do not need detection at all.
+case "${1:-}" in
+  help | -h | --help) usage; exit 0 ;;
+  install) shift; do_install "$@"; exit $? ;;
+  uninstall) do_uninstall; exit $? ;;
+esac
+
+check_deps
+build_dirs
+
+# 1. config: !command hides, Label|command|args adds
+if [ -r "$CONFIG" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%%#*}
+    [ -n "${line// /}" ] || continue
+    if [ "${line:0:1}" = "!" ]; then
+      hidden_cmd["${line:1}"]=1
+      continue
+    fi
+    IFS='|' read -r label cmd args <<< "$line"
+    [ -n "${label:-}" ] && [ -n "${cmd:-}" ] || cmd=${label:-}
+    [ -n "${label:-}" ] || label=$(title_label "$cmd")
+    add_entry "$label" "$cmd" "${args:-}" "config:$CONFIG"
+  done < "$CONFIG"
+fi
+
+# 2. curated registry
+for entry in "${CANDIDATES[@]}"; do
+  IFS='|' read -r label cmd args hint <<< "$entry"
+  add_entry "$label" "$cmd" "$args" "$hint"
+done
+
+# 3. generic discovery: every executable in every search dir that is named like
+# an agent. Runs entirely in builtins - spawning a process per file is far too
+# slow on WSL and network mounts.
+DISCOVERED=0
+if [ "${AI_DISCOVER:-1}" != 0 ]; then
+  for d in "${DIRS[@]}"; do
+    for f in "$d"/*; do
+      [ -f "$f" ] && [ -x "$f" ] || continue
+      base=${f##*/}
+      [ -z "${seen_cmd[$base]:-}" ] || continue
+      [ -z "${hidden_cmd[$base]:-}" ] || continue
+      [[ "$base" =~ $AGENT_RE ]] || continue
+      [[ "$base" =~ $DENY_RE ]] && continue
+      [[ "$base" =~ $SYSTEM_AGENT_RE ]] && continue
+      add_entry "$(title_label "$base")" "$base" "" "discovered in $d"
+      [ -n "${have_cmd[$base]:-}" ] && DISCOVERED=$((DISCOVERED + 1))
+    done
+  done
+fi
+
+if [ ${#tools[@]} -eq 0 ]; then
+  echo "ai: no AI coding CLI detected." >&2
+  echo "run 'ai -a' for the registry, or add one to $CONFIG" >&2
+  exit 1
+fi
+
+case "${1:-}" in
+  -a | --all) show_all 0; exit 0 ;;
+  --missing) show_all 1; exit 0 ;;
+  doctor)
+    check_deps verbose
+    printf 'search dirs %s\n' "${#DIRS[@]}"
+    printf 'detected    %s tools (%s by discovery)\n' "${#tools[@]}" "$DISCOVERED"
+    echo
+    show_all 0
+    exit 0
+    ;;
+esac
+
 # `ai <name> [args...]` launches directly, skipping the menu.
 REQUESTED=""
 if [ $# -gt 0 ]; then
   case "$1" in
-    -l|--list) NONINTERACTIVE=1 ;;
-    -h|--help)
-      echo "usage: ai [tool] [args...]   pick a CLI, or launch one by name"
-      echo "       ai -l                 just list what is installed"
-      exit 0
-      ;;
+    -l | --list) NONINTERACTIVE=1 ;;
     *) REQUESTED="$1" ;;
   esac
 fi
 if [ -n "$REQUESTED" ]; then
   for line in "${tools[@]}"; do
-    IFS='|' read -r label cmd args path <<< "$line"
+    IFS='|' read -r label cmd args hint path <<< "$line"
     lc=$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -d ' -')
-    if [ "$REQUESTED" = "$cmd" ] || [ "$REQUESTED" = "$lc" ]; then
+    if [ "$REQUESTED" = "$cmd" ] || [ "$REQUESTED" = "${cmd##*/}" ] || [ "$REQUESTED" = "$lc" ]; then
       shift
       launch "$line" "$@"
     fi
   done
-  printf 'ai: "%s" is not an installed tool; showing the menu.\n\n' "$REQUESTED" >&2
+  printf 'ai: "%s" is not a detected tool; showing the menu.\n\n' "$REQUESTED" >&2
 fi
 
 if [ ! -t 0 ] || [ ! -t 1 ] || [ "$NONINTERACTIVE" = 1 ]; then
   for line in "${tools[@]}"; do
-    IFS='|' read -r label cmd args path <<< "$line"
+    IFS='|' read -r label cmd args hint path <<< "$line"
     printf '%s\t%s\n' "$cmd" "$label"
   done
   exit 0
 fi
 
 menu() {
-  local n=${#tools[@]} sel=0 drawn=0 cols i label cmd args path short row d
+  local n=${#tools[@]} sel=0 start=0 drawn=0 rows=0
+  local cols i label cmd args hint path short row d lo hi more keys cmddisp
   cols=$(tput cols 2>/dev/null) || cols=80
   [ "$cols" -ge 50 ] || cols=50
 
@@ -106,20 +402,34 @@ menu() {
   trap cleanup EXIT INT TERM
 
   while :; do
+    rows=$(($(tput lines 2>/dev/null || echo 24) - 5))
+    [ "$rows" -ge 3 ] || rows=3
+    [ "$rows" -gt "$n" ] && rows=$n
+    if ((sel < start)); then start=$sel; fi
+    if ((sel >= start + rows)); then start=$((sel - rows + 1)); fi
+    lo=$start; hi=$((start + rows - 1))
+
     local -a lines=()
     lines+=("$(printf '\033[1m  AI CLI launcher\033[0m')")
-    for ((i = 0; i < n; i++)); do
-      IFS='|' read -r label cmd args path <<< "${tools[i]}"
+    for ((i = lo; i <= hi; i++)); do
+      IFS='|' read -r label cmd args hint path <<< "${tools[i]}"
       short=${path/#$HOME/\~}
-      short=${short:0:cols - 32}
+      short=${short:0:cols - 40}
+      cmddisp=${cmd##*/}
       if ((i == sel)); then
-        row=$(printf '\033[36m  \u25b8 %-14s\033[0m\033[1m%-12s\033[0m\033[2m%s\033[0m' "$label" "$cmd" "$short")
+        row=$(printf '\033[36m  \u25b8 %-18.18s\033[0m\033[1m%-14.14s\033[0m  \033[2m%s\033[0m' "$label" "$cmddisp" "$short")
       else
-        row=$(printf '    %-14s%-12s\033[2m%s\033[0m' "$label" "$cmd" "$short")
+        row=$(printf '    %-18.18s%-14.14s  \033[2m%s\033[0m' "$label" "$cmddisp" "$short")
       fi
       lines+=("$row")
     done
-    lines+=("$(printf '\033[2m  \u2191/\u2193 choose \u00b7 enter launch \u00b7 q quit\033[0m')")
+    if ((hi + 1 < n)); then
+      more=$(printf '   \033[2m\u25be %s more\033[0m' $((n - hi - 1)))
+    else
+      more=""
+    fi
+    keys=$(printf '\033[2m  \u2191/\u2193 choose \u00b7 enter launch \u00b7 q quit\033[0m')
+    lines+=("${keys}${more}")
 
     # erase the previous drawing, leaving the cursor on its top line
     printf '\r\033[2K'
@@ -140,6 +450,8 @@ menu() {
       $'\x03') exit 130 ;;
       k) ((sel > 0)) && sel=$((sel - 1)) ;;
       j) ((sel < n - 1)) && sel=$((sel + 1)) ;;
+      g) sel=0 ;;
+      G) sel=$((n - 1)) ;;
       [[:digit:]])
         d=$((10#$key))
         ((d >= 1 && d <= n)) && sel=$((d - 1))
