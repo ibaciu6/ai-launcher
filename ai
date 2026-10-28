@@ -91,9 +91,9 @@ ai $VERSION - launcher for local AI coding CLIs
 Detection:
   Scans every PATH entry plus a few vendor install dirs and matches agent-name
   patterns, so locally installed tools are found without registering them.
-  PATH dirs under /mnt are skipped so Windows shares do not slow the scan.
+  Any scanned dir under /mnt is skipped, so Windows shares do not slow the scan.
   AI_DISCOVER=0        skip discovery, use the registry only
-  AI_EXTRA_DIRS="a:b"  more dirs to scan
+  AI_EXTRA_DIRS="a:b"  more dirs to scan (not under /mnt)
   AI_AGENT_TOKENS      extend the name patterns that count as an agent
 
 Environment:

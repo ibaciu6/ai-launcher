@@ -115,7 +115,7 @@ line, because a path or argument may legitimately contain `#`.
 | `AI_CONFIG` | path to the config file |
 | `AI_BIN_DIR` | install target directory (default `~/.local/bin`) |
 | `AI_DISCOVER=0` | registry only, skip the filesystem scan |
-| `AI_EXTRA_DIRS="a:b"` | additional directories to scan |
+| `AI_EXTRA_DIRS="a:b"` | additional directories to scan; dirs under `/mnt` are never scanned |
 | `AI_AGENT_TOKENS='claude\|mytool'` | extend the name patterns treated as agents |
 | `AI_TRUST_INSECURE=1` | allow launching a tool the permission check would refuse |
 
@@ -126,7 +126,7 @@ The picker execs binaries, so `ai` applies the same rule every time, just before
 - refuse if the file is writable by accounts other than its owner (world-writable),
 - refuse if its directory is,
 - refuse if the file is owned by anyone other than root or you,
-- skip `PATH` directories under `/mnt` during the scan.
+- skip any scanned directory under `/mnt`, including ones added through `AI_EXTRA_DIRS`.
 
 `ai doctor` lists anything it would refuse, and `AI_TRUST_INSECURE=1` turns the refusal off for a
 deliberate case. The check follows symlinks (`stat -L`) because npm-style global installs are
@@ -240,7 +240,7 @@ printf '%b' '\033[B\033[B\r' | timeout 6 script -qec 'COLUMNS=90 /tmp/ait' /dev/
 | `bash 4 or newer is required` | You are on a stock macOS bash 3.2. Install bash (`brew install bash`) or another package manager's build. |
 | `ai: "stty" is required for arrow-key navigation` | Minimal container image. `stty` is only needed for the picker; `ai <tool>` and `ai -l` work without it. |
 | `ai: refusing to launch /path/to/tool` | The file or its directory is world-writable, or the file is owned by another account. Fix the mode/ownership, or set `AI_TRUST_INSECURE=1` if it is deliberate; `ai doctor` lists every such tool. |
-| A tool you know is installed does not appear | It is not in a scanned directory (`ai doctor` prints the count) or its name has no known token on a separator boundary. Add it to the config file, pass its directory via `AI_EXTRA_DIRS`, or extend `AI_AGENT_TOKENS`. |
+| A tool you know is installed does not appear | It is not in a scanned directory (`ai doctor` prints the count) or its name has no known token on a separator boundary. Add it to the config file, pass its directory via `AI_EXTRA_DIRS` (never scanned under `/mnt`), or extend `AI_AGENT_TOKENS`. |
 | Two tools with the same binary name, one row | Intended: entries are keyed by base name and the first directory in `PATH` order wins. Name the one you want in the config file. |
 | A non-AI tool appears | `!command` it in the config file, or narrow patterns with `AI_AGENT_TOKENS`. Please also open an issue — the deny list belongs in the script. |
 | Slow startup | A scanned directory is a network mount. Use `AI_DISCOVER=0` or trim `PATH`/`AI_EXTRA_DIRS`. |
