@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# ai - pick and launch an installed local AI coding CLI.
+
+set -u
+
+NONINTERACTIVE=0
+SAVED_TTY=""
+
+# Candidates: display name | command | optional launch args (space separated)
+CANDIDATES=(
+  "Qoder|qoder|"
+  "OpenCode|opencode|"
+  "Claude Code|claude|"
+  "Codex|codex|"
+  "Gemini CLI|gemini|"
+  "Aider|aider|"
+  "Cursor Agent|cursor-agent|"
+  "Crush|crush|"
+  "Goose|goose|"
+  "Amp|amp|"
+  "Droid|droid|"
+)
+
+tools=()
+names=()
+for entry in "${CANDIDATES[@]}"; do
+  IFS='|' read -r label cmd args <<< "$entry"
+  names+=("$cmd")
+  if path=$(command -v "$cmd" 2>/dev/null); then
+    tools+=("$label|$cmd|$args|$path")
+  fi
+done
+
+if [ ${#tools[@]} -eq 0 ]; then
+  echo "ai: no supported AI CLI found on PATH." >&2
+  echo "looked for: $(printf '%s, ' "${names[@]}" | sed 's/, $//')" >&2
+  exit 1
+fi
+
+restore_tty() {
+  [ -n "$SAVED_TTY" ] && stty "$SAVED_TTY" 2>/dev/null
+  SAVED_TTY=""
+}
+
+launch() {
+  local line="$1"; shift
+  IFS='|' read -r label cmd args path <<< "$line"
+  [ -n "$args" ] && set -- $args "$@"
+  restore_tty
+  printf '\033[0m'
+  printf 'launching %s (%s)\n' "$label" "$cmd" >&2
+  exec "$cmd" "$@"
+}
+
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM
+  restore_tty
+  printf '\033[0m\033[?25h'
+  exit "$rc"
+}
+
+# `ai <name> [args...]` launches directly, skipping the menu.
+REQUESTED=""
+if [ $# -gt 0 ]; then
+  case "$1" in
+    -l|--list) NONINTERACTIVE=1 ;;
+    -h|--help)
+      echo "usage: ai [tool] [args...]   pick a CLI, or launch one by name"
+      echo "       ai -l                 just list what is installed"
+      exit 0
+      ;;
+    *) REQUESTED="$1" ;;
+  esac
+fi
+if [ -n "$REQUESTED" ]; then
+  for line in "${tools[@]}"; do
+    IFS='|' read -r label cmd args path <<< "$line"
+    lc=$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -d ' -')
+    if [ "$REQUESTED" = "$cmd" ] || [ "$REQUESTED" = "$lc" ]; then
+      shift
+      launch "$line" "$@"
+    fi
+  done
+  printf 'ai: "%s" is not an installed tool; showing the menu.\n\n' "$REQUESTED" >&2
+fi
+
+if [ ! -t 0 ] || [ ! -t 1 ] || [ "$NONINTERACTIVE" = 1 ]; then
+  for line in "${tools[@]}"; do
+    IFS='|' read -r label cmd args path <<< "$line"
+    printf '%s\t%s\n' "$cmd" "$label"
+  done
+  exit 0
+fi
+
+menu() {
+  local n=${#tools[@]} sel=0 drawn=0 cols i label cmd args path short row d
+  cols=$(tput cols 2>/dev/null) || cols=80
+  [ "$cols" -ge 50 ] || cols=50
+
+  if SAVED_TTY=$(stty -g 2>/dev/null); then
+    stty raw -echo 2>/dev/null
+  else
+    SAVED_TTY=""
+  fi
+  trap cleanup EXIT INT TERM
+
+  while :; do
+    local -a lines=()
+    lines+=("$(printf '\033[1m  AI CLI launcher\033[0m')")
+    for ((i = 0; i < n; i++)); do
+      IFS='|' read -r label cmd args path <<< "${tools[i]}"
+      short=${path/#$HOME/\~}
+      short=${short:0:cols - 32}
+      if ((i == sel)); then
+        row=$(printf '\033[36m  \u25b8 %-14s\033[0m\033[1m%-12s\033[0m\033[2m%s\033[0m' "$label" "$cmd" "$short")
+      else
+        row=$(printf '    %-14s%-12s\033[2m%s\033[0m' "$label" "$cmd" "$short")
+      fi
+      lines+=("$row")
+    done
+    lines+=("$(printf '\033[2m  \u2191/\u2193 choose \u00b7 enter launch \u00b7 q quit\033[0m')")
+
+    # erase the previous drawing, leaving the cursor on its top line
+    printf '\r\033[2K'
+    for ((i = 1; i < drawn; i++)); do printf '\033[1A\r\033[2K'; done
+    for ((i = 0; i < ${#lines[@]}; i++)); do
+      printf '%s' "${lines[i]}"
+      if [ "$i" -lt $((${#lines[@]} - 1)) ]; then printf '\r\n'; fi
+    done
+    drawn=${#lines[@]}
+
+    IFS= read -r -n1 key || { printf '\r\n'; exit 130; }
+    case "$key" in
+      '' | $'\r' | $'\n')
+        printf '\r\n'
+        launch "${tools[sel]}"
+        ;;
+      q | Q) exit 0 ;;
+      $'\x03') exit 130 ;;
+      k) ((sel > 0)) && sel=$((sel - 1)) ;;
+      j) ((sel < n - 1)) && sel=$((sel + 1)) ;;
+      [[:digit:]])
+        d=$((10#$key))
+        ((d >= 1 && d <= n)) && sel=$((d - 1))
+        ;;
+      $'\x1b')
+        IFS= read -r -n1 -t 1 next || continue
+        [ "$next" = "[" ] || continue
+        IFS= read -r -n1 -t 1 code || continue
+        case "$code" in
+          A) ((sel > 0)) && sel=$((sel - 1)) ;;
+          B) ((sel < n - 1)) && sel=$((sel + 1)) ;;
+          G | H) sel=0 ;;
+          F) sel=$((n - 1)) ;;
+        esac
+        ;;
+    esac
+  done
+}
+
+menu
