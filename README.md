@@ -4,7 +4,8 @@ One command that detects the AI coding CLIs installed on your machine, shows the
 arrow-key picker, and hands the terminal over to the one you choose.
 
 Single bash file, no `fzf`, no network access, no dependencies beyond a POSIX-ish userland —
-`stty` for the picker and `stat` for the launch check are the only optional lookups.
+`stty` for the picker, `tput` for the terminal size and `stat` for the launch check are the only
+optional lookups, each with a fallback.
 
 ## Requirements
 
@@ -194,9 +195,9 @@ These are the reasons the code looks the way it does. Re-read before "simplifyin
    with `-t 1`; on timeout the key is ignored rather than treated as quit, so pressing Escape
    alone does nothing.
 6. **Digits use `10#$key`.** Bare `$(( ))` on a digit string treats `08`/`09` as invalid octal.
-7. **Non-tty falls back to plain output.** If stdout is not a terminal, or `-l` was given, the
-   script prints `cmd<TAB>label` and exits — this is what makes `ai -l | fzf` and shell completion
-   possible later.
+7. **Non-tty falls back to plain output.** If stdin or stdout is not a terminal, or `-l` was given,
+   the script prints `cmd<TAB>label` and exits — this is what makes `ai -l | fzf` and shell
+   completion possible later.
 8. **Startup is fork-free on purpose.** Detection uses `-f`/`-x` tests and builtin regex instead of
    `$(command -v)` and `grep` pipelines, because a process per lookup made startup ~1.6s on WSL
    versus ~0.15s now. Keep new code fork-free — including helpers, which is why `short_path` and
