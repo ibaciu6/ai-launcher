@@ -1,1 +1,2 @@
-.qoder/
+# machine-local CLI permission grants
+.qoder/settings.local.json

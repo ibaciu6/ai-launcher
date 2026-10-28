@@ -75,6 +75,11 @@ EXTRA_DIRS=(
 )
 
 usage() {
+  # ~ instead of $HOME: the help text gets pasted into issue reports, and an
+  # absolute path there names the account. short_path is fork-free.
+  local bin_disp config_disp
+  short_path "$BIN_DIR"; bin_disp=$S_PATH
+  short_path "$CONFIG"; config_disp=$S_PATH
   cat <<USAGE
 ai $VERSION - launcher for local AI coding CLIs
 
@@ -84,14 +89,14 @@ ai $VERSION - launcher for local AI coding CLIs
   ai -a | --all           registry + discovered tools, found and missing
   ai --missing            registry entries not installed yet
   ai doctor               dependency, discovery, registry and trust check
-  install [--copy]        link this script into $BIN_DIR (override: AI_BIN_DIR)
+  install [--copy]        link into $bin_disp (override: AI_BIN_DIR)
   uninstall               remove that link, only if it points back here
   help | --version        this message, or the version
 
 Detection:
   Scans every PATH entry plus a few vendor install dirs and matches agent-name
   patterns, so locally installed tools are found without registering them.
-  Any scanned dir under /mnt is skipped, so Windows shares do not slow the scan.
+  Scanned dirs under /mnt are skipped so Windows shares do not slow the scan.
   AI_DISCOVER=0        skip discovery, use the registry only
   AI_EXTRA_DIRS="a:b"  more dirs to scan (not under /mnt)
   AI_AGENT_TOKENS      extend the name patterns that count as an agent
@@ -101,12 +106,13 @@ Environment:
   AI_TRUST_INSECURE=1  allow launching a tool whose file or directory is
                        writable by another account (refused by default).
 
-Config ($CONFIG, one entry per line):
+Config ($config_disp, one entry per line):
   Label|command|args      add your own agent; command may be an absolute path
   !command                hide a tool discovery keeps finding
   # comment               must start the line (paths may contain #)
 
-Keys: up/down or j/k move, 1-9 jumps, g/G first/last, home/end, enter launches, q quits.
+Keys: up/down or j/k move, 1-9 jumps, g/G first/last, home/end, enter launches,
+      q quits.
 
 Quick start:
   chmod +x ai
